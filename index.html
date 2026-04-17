@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Kanban Board</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --col-backlog:    #6366f1;
+      --col-processo:   #f59e0b;
+      --col-ajustes:    #ec4899;
+      --col-validacao:  #3b82f6;
+      --col-concluido:  #10b981;
+      --bg:             #f4f5f7;
+      --surface:        #ffffff;
+      --border:         #e2e8f0;
+      --text:           #1e293b;
+      --text-muted:     #64748b;
+      --shadow:         0 1px 3px rgba(0,0,0,.08);
+      --radius:         10px;
+      --radius-sm:      6px;
+    }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+
+    header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 0 2rem; height: 60px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 100; }
+    .logo  { font-size: 18px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+    .header-actions { display: flex; align-items: center; gap: 10px; }
+    #apiStatus { font-size: 12px; color: var(--text-muted); display: flex; align-items: center; gap: 5px; }
+    .status-dot { width: 8px; height: 8px; border-radius: 50%; }
+    .status-ok  { background: #10b981; }
+    .status-err { background: #ef4444; }
+
+    .btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; border-radius: var(--radius-sm); font-size: 14px; font-weight: 500; cursor: pointer; border: none; transition: opacity .15s, transform .1s; }
+    .btn:active { transform: scale(.97); }
+    .btn-primary { background: #6366f1; color: #fff; }
+    .btn-primary:hover { opacity: .9; }
+    .btn-ghost  { background: transparent; color: var(--text-muted); border: 1px solid var(--border); }
+    .btn-ghost:hover  { background: var(--bg); }
+    .btn-danger { background: #fef2f2; color: #dc2626; border: 1px solid #fecaca; }
+    .btn-danger:hover { background: #fee2e2; }
+
+    #toast { position: fixed; bottom: 2rem; right: 2rem; background: #1e293b; color: #fff; padding: 10px 18px; border-radius: var(--radius-sm); font-size: 14px; opacity: 0; transform: translateY(8px); transition: opacity .25s, transform .25s; z-index: 9999; pointer-events: none; }
+    #toast.show { opacity: 1; transform: translateY(0); }
+
+    .loading-bar { height: 3px; background: #6366f1; position: fixed; top: 0; left: 0; width: 0; z-index: 9999; transition: width .4s ease; }
+    .loading-bar.on   { width: 75%; }
+    .loading-bar.done { width: 100%; opacity: 0; transition: width .3s, opacity .3s ease .3s; }
+
+    .board-wrapper { padding: 1.5rem 2rem; overflow-x: auto; }
+    .board { display: grid; grid-template-columns: repeat(5, minmax(235px, 1fr)); gap: 13px; min-width: 1250px; }
+
+    .column { background: var(--surface); border-radius: var(--radius); border: 1px solid var(--border); display: flex; flex-direction: column; max-height: calc(100vh - 130px); }
+    .column-header { padding: 13px 15px 10px; display: flex; align-items: center; justify-content: space-between; border-bottom: 3px solid transparent; border-radius: var(--radius) var(--radius) 0 0; }
+    .column[data-col="Backlog"]              .column-header { border-color: var(--col-backlog); }
+    .column[data-col="Em Processo"]          .column-header { border-color: var(--col-processo); }
+    .column[data-col="Com Ajustes"]          .column-header { border-color: var(--col-ajustes); }
+    .column[data-col="Aguardando Validação"] .column-header { border-color: var(--col-validacao); }
+    .column[data-col="Concluído"]            .column-header { border-color: var(--col-concluido); }
+    .col-title { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--text-muted); }
+    .col-count { font-size: 12px; font-weight: 600; background: var(--bg); border-radius: 999px; padding: 2px 8px; color: var(--text-muted); }
+
+    .cards-list { flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 9px; min-height: 60px; }
+    .cards-list.drag-over { background: rgba(99,102,241,.05); border-radius: 0 0 var(--radius) var(--radius); }
+
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 11px 13px; cursor: grab; box-shadow: var(--shadow); transition: box-shadow .15s; }
+    .card:hover { box-shadow: 0 4px 12px rgba(0,0,0,.1); }
+    .card.dragging { opacity: .4; cursor: grabbing; }
+    .card.overdue { border-left: 3px solid #ef4444; background: #fffafa; }
+
+    .card-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 6px; margin-bottom: 7px; }
+    .card-title  { font-size: 13px; font-weight: 600; color: var(--text); line-height: 1.4; flex: 1; }
+    .card-title a { color: inherit; text-decoration: none; }
+    .card-title a:hover { text-decoration: underline; color: #6366f1; }
+
+    .card-actions { display: flex; gap: 1px; opacity: 0; transition: opacity .15s; flex-shrink: 0; }
+    .card:hover .card-actions { opacity: 1; }
+    .card-btn { background: none; border: none; cursor: pointer; color: var(--text-muted); padding: 3px 5px; border-radius: 4px; font-size: 13px; line-height: 1; transition: background .1s, color .1s; }
+    .card-btn:hover { background: var(--bg); }
+    .card-btn.edit:hover { color: #6366f1; }
+    .card-btn.del:hover  { color: #ef4444; }
+
+    .card-meta { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+    .badge { display: inline-flex; align-items: center; font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 999px; text-transform: uppercase; letter-spacing: .04em; }
+    .badge-seo          { background: #ede9fe; color: #6d28d9; }
+    .badge-geo          { background: #d1fae5; color: #065f46; }
+    .badge-month        { background: #fff7ed; color: #c2410c; }
+    .badge-date         { background: #f0f9ff; color: #0369a1; }
+    .badge-date-overdue { background: #fee2e2; color: #dc2626; }
+    .badge-overdue-tag  { background: #fee2e2; color: #dc2626; font-weight: 700; }
+
+    .empty-state { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 24px 12px; color: var(--text-muted); font-size: 13px; text-align: center; opacity: .6; pointer-events: none; }
+
+    .modal-backdrop { display: none; position: fixed; inset: 0; background: rgba(15,23,42,.5); z-index: 500; align-items: center; justify-content: center; }
+    .modal-backdrop.open { display: flex; }
+    .modal { background: var(--surface); border-radius: var(--radius); padding: 28px; width: 100%; max-width: 500px; box-shadow: 0 20px 40px rgba(0,0,0,.2); animation: slideUp .2s ease; }
+    @keyframes slideUp { from { opacity:0; transform:translateY(14px); } to { opacity:1; transform:translateY(0); } }
+    .modal h2 { font-size: 18px; font-weight: 700; margin-bottom: 20px; }
+    .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    .form-group { margin-bottom: 14px; }
+    .form-group label { display: block; font-size: 13px; font-weight: 500; margin-bottom: 5px; color: var(--text-muted); }
+    .form-group input, .form-group select { width: 100%; padding: 9px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 14px; color: var(--text); background: var(--surface); outline: none; transition: border-color .15s; }
+    .form-group input:focus, .form-group select:focus { border-color: #6366f1; box-shadow: 0 0 0 3px rgba(99,102,241,.12); }
+    .modal-footer { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-top: 22px; }
+    .modal-footer-right { display: flex; gap: 8px; }
+  </style>
+</head>
+<body>
+
+<div class="loading-bar" id="loadingBar"></div>
+
+<header>
+  <div class="logo">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <rect x="3" y="3" width="7" height="18" rx="1"/><rect x="14" y="3" width="7" height="10" rx="1"/><rect x="14" y="17" width="7" height="4" rx="1"/>
+    </svg>
+    Kanban Board
+  </div>
+  <div class="header-actions">
+    <span id="apiStatus"><span class="status-dot" id="statusDot"></span><span id="statusText">conectando…</span></span>
+    <button class="btn btn-ghost" id="btnRefresh">↺ Atualizar</button>
+    <button class="btn btn-primary" id="btnNewCard">+ Novo Card</button>
+  </div>
+</header>
+
+<div class="board-wrapper">
+  <div class="board">
+    <div class="column" data-col="Backlog">
+      <div class="column-header"><span class="col-title">Backlog</span><span class="col-count" id="cnt-Backlog">0</span></div>
+      <div class="cards-list" id="list-Backlog"></div>
+    </div>
+    <div class="column" data-col="Em Processo">
+      <div class="column-header"><span class="col-title">Em Processo</span><span class="col-count" id="cnt-Em Processo">0</span></div>
+      <div class="cards-list" id="list-Em Processo"></div>
+    </div>
+    <div class="column" data-col="Com Ajustes">
+      <div class="column-header"><span class="col-title">Com Ajustes</span><span class="col-count" id="cnt-Com Ajustes">0</span></div>
+      <div class="cards-list" id="list-Com Ajustes"></div>
+    </div>
+    <div class="column" data-col="Aguardando Validação">
+      <div class="column-header"><span class="col-title">Aguardando Validação</span><span class="col-count" id="cnt-Aguardando Validação">0</span></div>
+      <div class="cards-list" id="list-Aguardando Validação"></div>
+    </div>
+    <div class="column" data-col="Concluído">
+      <div class="column-header"><span class="col-title">Concluído</span><span class="col-count" id="cnt-Concluído">0</span></div>
+      <div class="cards-list" id="list-Concluído"></div>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="modal">
+  <div class="modal">
+    <h2 id="modalTitle">Novo Card</h2>
+    <div class="form-group">
+      <label>Título *</label>
+      <input type="text" id="fTitulo" placeholder="Descreva a tarefa…" />
+    </div>
+    <div class="form-group">
+      <label>URL da Tarefa</label>
+      <input type="url" id="fUrl" placeholder="https://…" />
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Tipo</label>
+        <select id="fTipo">
+          <option value="">— Selecione —</option>
+          <option value="SEO">SEO</option>
+          <option value="GEO">GEO</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Mês</label>
+        <select id="fMes">
+          <option value="">— Selecione —</option>
+          <option>Janeiro</option><option>Fevereiro</option><option>Março</option>
+          <option>Abril</option><option>Maio</option><option>Junho</option>
+          <option>Julho</option><option>Agosto</option><option>Setembro</option>
+          <option>Outubro</option><option>Novembro</option><option>Dezembro</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Data de Entrega</label>
+        <input type="date" id="fData" />
+      </div>
+      <div class="form-group">
+        <label>Coluna</label>
+        <select id="fColuna">
+          <option value="Backlog">Backlog</option>
+          <option value="Em Processo">Em Processo</option>
+          <option value="Com Ajustes">Com Ajustes</option>
+          <option value="Aguardando Validação">Aguardando Validação</option>
+          <option value="Concluído">Concluído</option>
+        </select>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-danger" id="btnDelete" style="display:none">🗑 Excluir card</button>
+      <div class="modal-footer-right">
+        <button class="btn btn-ghost" id="btnCancel">Cancelar</button>
+        <button class="btn btn-primary" id="btnSave">Salvar</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+  // ── TROQUE PELA URL DO SEU APPS SCRIPT ───────────────────
+  const API_URL = 'https://script.google.com/macros/s/AKfycbxS5RD8VykT_R2WdoI--z1teLqeqdzHmcspNByw9JNhu_oMsz5pVra55o1OV-na6Qrj3Q/exec';
+  // ────────────────────────────────────────────────────────
+
+  const COLUMNS = ['Backlog', 'Em Processo', 'Com Ajustes', 'Aguardando Validação', 'Concluído'];
+  let cards = [], draggedId = null, editingId = null;
+
+  const $ = id => document.getElementById(id);
+  let toastTimer;
+  function toast(msg, dur=2800) { const el=$('toast'); el.textContent=msg; el.classList.add('show'); clearTimeout(toastTimer); toastTimer=setTimeout(()=>el.classList.remove('show'),dur); }
+  function loading(on) { const b=$('loadingBar'); b.className=on?'loading-bar on':'loading-bar done'; if(!on)setTimeout(()=>b.className='loading-bar',700); }
+  function setStatus(ok,msg) { $('statusDot').className='status-dot '+(ok?'status-ok':'status-err'); $('statusText').textContent=msg; }
+  function genId() { return 'c'+Date.now()+Math.random().toString(36).slice(2,6); }
+  function esc(s)  { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+  // Converte qualquer formato de data em objeto Date seguro
+  function parseDate(s) {
+    if (!s) return null;
+    // Formato ISO: 2026-04-27
+    if (/^\d{4}-\d{2}-\d{2}$/.test(String(s))) {
+      const [y,m,d] = String(s).split('-').map(Number);
+      return new Date(y, m-1, d);
+    }
+    // Outros formatos (ex: vindo da planilha como texto)
+    const d = new Date(s);
+    return isNaN(d) ? null : d;
+  }
+
+  function fmtDate(s) {
+    const d = parseDate(s);
+    if (!d) return '';
+    return `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()}`;
+  }
+
+  function isOverdue(card) {
+    if (!card.data || card.status === 'Concluído') return false;
+    const today = new Date(); today.setHours(0,0,0,0);
+    const due   = parseDate(card.data);
+    return due ? due < today : false;
+  }
+
+  // ── RENDER ────────────────────────────────────────────────
+  function render() {
+    COLUMNS.forEach(col => {
+      const list = $(`list-${col}`);
+      const cc = cards
+        .filter(c => c.status === col)
+        .sort((a, b) => {
+          const da = parseDate(a.data);
+          const db = parseDate(b.data);
+          if (!da && !db) return 0;
+          if (!da) return 1;   // sem data vai pro final
+          if (!db) return -1;
+          return da - db;      // data mais próxima primeiro
+        });
+
+      $(`cnt-${col}`).textContent = cc.length;
+
+      if (!cc.length) {
+        list.innerHTML = `<div class="empty-state">
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="opacity:.35">
+            <rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 12h6M12 9v6"/>
+          </svg>Nenhum card</div>`;
+        return;
+      }
+
+      list.innerHTML = cc.map(c => {
+        const od = isOverdue(c);
+        return `<div class="card${od?' overdue':''}" draggable="true" data-id="${c.id}">
+          <div class="card-header">
+            <div class="card-title">
+              ${c.url ? `<a href="${esc(c.url)}" target="_blank" rel="noopener">${esc(c.titulo)}</a>` : esc(c.titulo)}
+            </div>
+            <div class="card-actions">
+              <button class="card-btn edit" data-id="${c.id}" title="Editar">✏️</button>
+              <button class="card-btn del"  data-id="${c.id}" title="Excluir">✕</button>
+            </div>
+          </div>
+          <div class="card-meta">
+            ${c.tipo==='SEO' ? '<span class="badge badge-seo">SEO</span>' : ''}
+            ${c.tipo==='GEO' ? '<span class="badge badge-geo">GEO</span>' : ''}
+            ${c.mes  ? `<span class="badge badge-month">${esc(c.mes)}</span>` : ''}
+            ${c.data ? `<span class="badge ${od?'badge-date-overdue':'badge-date'}">📅 ${fmtDate(c.data)}</span>` : ''}
+            ${od     ? '<span class="badge badge-overdue-tag">⚠ Atrasado</span>' : ''}
+          </div>
+        </div>`;
+      }).join('');
+    });
+    bindCards();
+  }
+
+  function bindCards() {
+    document.querySelectorAll('.card').forEach(el => {
+      el.addEventListener('dragstart', e => { draggedId=el.dataset.id; setTimeout(()=>el.classList.add('dragging'),0); e.dataTransfer.effectAllowed='move'; });
+      el.addEventListener('dragend', () => el.classList.remove('dragging'));
+    });
+    document.querySelectorAll('.card-btn.edit').forEach(btn => btn.addEventListener('click', e => { e.stopPropagation(); openModal(btn.dataset.id); }));
+    document.querySelectorAll('.card-btn.del').forEach(btn  => btn.addEventListener('click', e => { e.stopPropagation(); removeCard(btn.dataset.id); }));
+  }
+
+  document.querySelectorAll('.cards-list').forEach(list => {
+    list.addEventListener('dragover',  e => { e.preventDefault(); list.classList.add('drag-over'); });
+    list.addEventListener('dragleave', () => list.classList.remove('drag-over'));
+    list.addEventListener('drop', async e => {
+      e.preventDefault(); list.classList.remove('drag-over');
+      if (!draggedId) return;
+      const newCol = list.closest('.column').dataset.col;
+      const card   = cards.find(c => c.id === draggedId);
+      if (!card || card.status === newCol) { draggedId=null; return; }
+      card.status = newCol; draggedId = null;
+      render();
+      await apiPost({ action:'upsert', card });
+      toast(`Movido para "${newCol}"`);
+    });
+  });
+
+  // ── API ───────────────────────────────────────────────────
+  function fetchCards() {
+    return new Promise((resolve, reject) => {
+      loading(true);
+      const cbName = '_kcb' + Date.now();
+      const script = document.createElement('script');
+      const timeout = setTimeout(() => { cleanup(); reject(new Error('timeout')); }, 12000);
+      window[cbName] = data => { cleanup(); resolve(data); };
+      function cleanup() { clearTimeout(timeout); delete window[cbName]; if (script.parentNode) script.parentNode.removeChild(script); }
+      script.onerror = () => { cleanup(); reject(new Error('erro')); };
+      script.src = `${API_URL}?callback=${cbName}&t=${Date.now()}`;
+      document.head.appendChild(script);
+    });
+  }
+
+  async function apiPost(payload) {
+    loading(true);
+    try { await fetch(API_URL, { method:'POST', mode:'no-cors', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload) }); }
+    catch(e) { console.warn('POST no-cors:', e.message); }
+    finally { loading(false); }
+  }
+
+  async function loadCards() {
+    try { const data = await fetchCards(); cards = Array.isArray(data) ? data : []; render(); setStatus(true,'conectado'); }
+    catch(e) { setStatus(false,'erro na API'); toast('Erro ao carregar. Verifique o Apps Script.',5000); }
+    finally { loading(false); }
+  }
+
+  async function removeCard(id) {
+    if (!confirm('Excluir este card?')) return;
+    cards = cards.filter(c => c.id !== id); render();
+    await apiPost({ action:'delete', id });
+    toast('Card excluído.');
+  }
+
+  // ── MODAL ─────────────────────────────────────────────────
+  function openModal(id=null) {
+    editingId = id;
+    const c = id ? cards.find(x => x.id===id) : null;
+    $('modalTitle').textContent = id ? 'Editar Card' : 'Novo Card';
+    $('fTitulo').value = c?.titulo  || '';
+    $('fUrl').value    = c?.url     || '';
+    $('fTipo').value   = c?.tipo    || '';
+    $('fMes').value    = c?.mes     || '';
+    // Garante que a data vai pro input como YYYY-MM-DD
+    const dp = c?.data ? parseDate(c.data) : null;
+    $('fData').value = dp ? `${dp.getFullYear()}-${String(dp.getMonth()+1).padStart(2,'0')}-${String(dp.getDate()).padStart(2,'0')}` : '';
+    $('fColuna').value = c?.status  || 'Backlog';
+    $('btnDelete').style.display = id ? 'inline-flex' : 'none';
+    $('modal').classList.add('open');
+    setTimeout(() => $('fTitulo').focus(), 50);
+  }
+
+  function closeModal() { $('modal').classList.remove('open'); editingId=null; }
+
+  $('btnNewCard').addEventListener('click', () => openModal());
+  $('btnCancel').addEventListener('click', closeModal);
+  $('modal').addEventListener('click', e => { if (e.target===$('modal')) closeModal(); });
+  $('btnDelete').addEventListener('click', async () => { const id=editingId; closeModal(); await removeCard(id); });
+
+  $('btnSave').addEventListener('click', async () => {
+    const titulo = $('fTitulo').value.trim();
+    if (!titulo) { $('fTitulo').focus(); toast('Informe um título.'); return; }
+    const card = {
+      id:     editingId || genId(),
+      titulo,
+      url:    $('fUrl').value.trim(),
+      tipo:   $('fTipo').value,
+      mes:    $('fMes').value,
+      data:   $('fData').value,   // sempre YYYY-MM-DD vindo do input date
+      status: $('fColuna').value
+    };
+    if (editingId) { const idx=cards.findIndex(c=>c.id===editingId); if(idx!==-1) cards[idx]=card; }
+    else cards.push(card);
+    closeModal(); render();
+    await apiPost({ action:'upsert', card });
+    toast(editingId ? 'Card atualizado!' : 'Card criado!');
+  });
+
+  $('btnRefresh').addEventListener('click', () => { toast('Atualizando…'); loadCards(); });
+  document.addEventListener('keydown', e => {
+    if (e.key==='Escape') closeModal();
+    if ((e.ctrlKey||e.metaKey) && e.key==='Enter' && $('modal').classList.contains('open')) $('btnSave').click();
+  });
+
+  loadCards();
+</script>
+</body>
+</html>
